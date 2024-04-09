@@ -2,16 +2,16 @@
 /* eslint-disable @typescript-eslint/no-var-requires */
 import chalk from "chalk";
 import * as inquirer from "inquirer";
+import { importIssues } from "./importIssues";
 import { asanaCsvImport } from "./importers/asanaCsv";
 import { githubImport } from "./importers/github";
 import { jiraCsvImport } from "./importers/jiraCsv";
 import { linearCsvImporter } from "./importers/linearCsv";
 import { pivotalCsvImport } from "./importers/pivotalCsv";
+import { pivotalSQLiteImport } from "./importers/pivotalSqlite";
 import { shortcutCsvImport } from "./importers/shortcutCsv";
 import { trelloJsonImport } from "./importers/trelloJson";
-import { importIssues } from "./importIssues";
 import { ImportAnswers } from "./types";
-import { pivotalSQLiteImport } from "./importers/pivotalSqlite";
 
 inquirer.registerPrompt("filePath", require("inquirer-file-path"));
 
@@ -22,11 +22,13 @@ inquirer.registerPrompt("filePath", require("inquirer-file-path"));
         type: "input",
         name: "linearApiKey",
         message: "Input your Linear API key (https://linear.app/settings/api)",
+        default: process.env.API_KEY,
       },
       {
         type: "list",
         name: "service",
         message: "Which service would you like to import from?",
+        default: "pivotalSQLite",
         choices: [
           {
             name: "GitHub",

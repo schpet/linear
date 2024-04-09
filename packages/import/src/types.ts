@@ -26,6 +26,7 @@ export interface Issue {
   completedAt?: Date;
   /** When the issue was started. */
   startedAt?: Date;
+  estimate?: number;
 }
 
 /** Issue comment */

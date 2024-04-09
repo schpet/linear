@@ -1,3 +1,4 @@
+/* eslint-disable eqeqeq */
 import { LinearClient } from "@linear/sdk";
 import { File } from "@web-std/file";
 import Database from "better-sqlite3";
@@ -6,6 +7,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import invariant from "tiny-invariant";
 import { Comment, ImportResult, Importer } from "../../types";
 import {
+  blockerTable,
   commentTable,
   epicTable,
   fileAttachmentFileTable,
@@ -56,9 +58,9 @@ export class PivotalSQLiteImporter implements Importer {
     // narrow the type
     invariant(importData.milestones);
 
-    const people = await db.select().from(personTable);
+    const allPeople = await db.select().from(personTable);
 
-    for (const user of people) {
+    for (const user of allPeople) {
       importData.users[user.id.toString()] = {
         name: user.name ?? "Unknown",
         email: user.email ?? undefined,
@@ -99,11 +101,24 @@ export class PivotalSQLiteImporter implements Importer {
 
     const stories = await db.select().from(storyTable);
     for (const story of stories) {
+      const blockers = await db.select().from(blockerTable).where(eq(blockerTable.story_id, story.id));
+
       const type = story.story_type as PivotalStoryType;
       const title = story.name;
       const url = `https://www.pivotaltracker.com/story/show/${story.id}`;
       const mdDesc = story.description ? j2m.to_markdown(story.description) : "";
-      const description = `${mdDesc}\n\n[View original issue in Pivotal](${url})`;
+      const blockerList = blockers
+        .map(b => {
+          if (b.resolved) {
+            return `- [x] ${b.description}`;
+          } else {
+            return `- [ ] ${b.description}`;
+          }
+        })
+        .join("\n");
+
+      const blockerDescription = blockerList ? `### Blockers\n\n${blockerList}\n\n` : "";
+      const description = `${mdDesc}\n\n${blockerDescription}[View original issue in Pivotal](${url})`;
 
       type TrackerStoryState =
         | "planned"
@@ -135,7 +150,7 @@ export class PivotalSQLiteImporter implements Importer {
       const isCreatedAtValid = !isNaN(createdAt.getTime());
       invariant(isCreatedAtValid, "expected createdAt to be a valid date");
 
-      const assigneeId = story.owned_by_id ? story.owned_by_id.toString() : undefined;
+      const assigneeEmail = story.owned_by_id ? allPeople.find(p => p.id === story.owned_by_id)?.email : undefined;
 
       const storyLabels = await db
         .select()
@@ -218,10 +233,11 @@ export class PivotalSQLiteImporter implements Importer {
         description,
         status,
         url,
-        assigneeId,
+        assigneeId: assigneeEmail ?? undefined,
         labels,
         createdAt,
         comments: comments,
+        estimate: story.estimate != null ? Math.floor(story.estimate) : undefined,
         ...(milestone ? { milestoneId: milestone.label_id.toString() } : {}),
       });
     }

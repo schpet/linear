@@ -18,6 +18,7 @@ interface ImportAnswers {
   targetProjectId?: string;
   targetTeamId?: string;
   teamName?: string;
+  isPeopleChecked?: boolean;
 }
 
 const defaultStateColors = {
@@ -31,7 +32,6 @@ const defaultStateColors = {
  */
 export const importIssues = async (apiKey: string, importer: Importer): Promise<void> => {
   const client = new LinearClient({ apiKey });
-  const importData = await importer.import();
 
   const viewerQuery = await client.viewer;
 
@@ -45,21 +45,22 @@ export const importIssues = async (apiKey: string, importer: Importer): Promise<
 
   // Prompt the user to either get or create a team
   const importAnswers = await inquirer.prompt<ImportAnswers>([
-    {
-      type: "confirm",
-      name: "newTeam",
-      message: "Do you want to create a new team for imported issues?",
-      default: true,
-    },
-    {
-      type: "input",
-      name: "teamName",
-      message: "Name of the team:",
-      default: importer.defaultTeamName || importer.name,
-      when: (answers: ImportAnswers) => {
-        return answers.newTeam;
-      },
-    },
+    // {
+    //   type: "confirm",
+    //   name: "newTeam",
+    //   message: "Do you want to create a new team for imported issues?",
+    //   default: false,
+    //   when: () => false,
+    // },
+    // {
+    //   type: "input",
+    //   name: "teamName",
+    //   message: "Name of the team:",
+    //   default: importer.defaultTeamName || importer.name,
+    //   when: (answers: ImportAnswers) => {
+    //     return answers.newTeam;
+    //   },
+    // },
     {
       type: "list",
       name: "targetTeamId",
@@ -72,23 +73,6 @@ export const importIssues = async (apiKey: string, importer: Importer): Promise<
       },
       when: (answers: ImportAnswers) => {
         return !answers.newTeam;
-      },
-    },
-    {
-      type: "confirm",
-      name: "includeProject",
-      message: "Do you want to import to a specific project?",
-      when: async (answers: ImportAnswers) => {
-        // if no team is selected then don't show projects screen
-        if (!answers.targetTeamId) {
-          return false;
-        }
-
-        const team = await client.team(answers.targetTeamId);
-        const teamProjects = await team?.projects();
-
-        const projects = teamProjects?.nodes ?? [];
-        return projects.length > 0;
       },
     },
     {
@@ -110,44 +94,43 @@ export const importIssues = async (apiKey: string, importer: Importer): Promise<
           value: project.id,
         }));
       },
-      when: (answers: ImportAnswers) => {
-        return answers.includeProject;
-      },
     },
-    {
-      type: "confirm",
-      name: "includeComments",
-      message: "Do you want to include comments in the issue description?",
-      when: () => {
-        return !!importData.issues.find(issue => issue.comments && issue.comments.length > 0);
-      },
-    },
-    {
-      type: "confirm",
-      name: "selfAssign",
-      message: "Do you want to assign these issues to yourself?",
-      default: true,
-    },
-    {
-      type: "list",
-      name: "targetAssignee",
-      message: "Assign to user:",
-      choices: () => {
-        const map = allUsers.map(user => ({
-          name: user.name,
-          value: user.id,
-        }));
+    // {
+    //   type: "confirm",
+    //   name: "selfAssign",
+    //   message: "Do you want to assign these issues to yourself?",
+    //   default: false,
+    //   when: () => false,
+    // },
+    // {
+    //   type: "list",
+    //   name: "targetAssignee",
+    //   message: "Assign to user:",
+    //   default: "{{assignee}}",
+    //   choices: () => {
+    //     const map = allUsers.map(user => ({
+    //       name: user.name,
+    //       value: user.id,
+    //     }));
 
-        map.unshift({ name: "[Unassigned]", value: "" });
-        map.unshift({ name: "[Provided assignee]", value: "{{assignee}}" });
+    //     map.unshift({ name: "[Unassigned]", value: "" });
+    //     map.unshift({ name: "[Provided assignee]", value: "{{assignee}}" });
 
-        return map;
-      },
-      when: (answers: ImportAnswers) => {
-        return !answers.selfAssign;
-      },
-    },
+    //     return map;
+    //   },
+    //   when: (answers: ImportAnswers) => {
+    //     return false;
+    //     return !answers.selfAssign;
+    //   },
+    // },
   ]);
+
+  const importData = await importer.import();
+
+  importAnswers.includeComments = true;
+  importAnswers.targetAssignee = "{{assignee}}";
+  importAnswers.selfAssign = false;
+  importAnswers.newTeam = false;
 
   let teamKey: string | undefined;
   let teamId: string | undefined;
@@ -174,6 +157,19 @@ export const importIssues = async (apiKey: string, importer: Importer): Promise<
 
   const teamInfo = await client.team(teamId);
   const organization = await client.organization;
+  const projectId = importAnswers.targetProjectId;
+  const project = projectId ? await client.project(projectId) : null;
+  const teamMembers = project ? await teamInfo.paginate(teamInfo.members, {}) : null;
+
+  const peopleMessage = Object.values(importData.users)
+    .map(u => {
+      const exists = (teamMembers ?? []).find(user => user.email === u.email);
+      const x = exists ? "x" : " ";
+      return `- [${x}] ${u.email}`;
+    })
+    .join("\n");
+
+  console.log(`Team member mapping:\n\n${peopleMessage}\n`);
 
   const existingLabels = [];
 
@@ -204,8 +200,6 @@ export const importIssues = async (apiKey: string, importer: Importer): Promise<
       }
     }
   }
-
-  const projectId = importAnswers.targetProjectId;
 
   // Create labels and mapping to source data
   const labelMapping = {} as { [id: string]: string };
@@ -243,8 +237,7 @@ export const importIssues = async (apiKey: string, importer: Importer): Promise<
   }
 
   const milestoneMapping = {} as { [id: string]: string };
-  if (projectId && importData.milestones) {
-    const project = await client.project(projectId);
+  if (projectId && project && importData.milestones) {
     const allProjectMilestones = await project.projectMilestones();
     const existingMilestoneMap = {} as { [name: string]: string };
     for (const milestone of allProjectMilestones?.nodes ?? []) {
@@ -291,7 +284,7 @@ export const importIssues = async (apiKey: string, importer: Importer): Promise<
 
   const existingUserMapByName = {} as { [name: string]: string };
   const existingUserMapByEmail = {} as { [email: string]: string };
-  for (const user of allUsers) {
+  for (const user of teamMembers ?? allUsers) {
     const userName = user.name?.toLowerCase();
     if (userName && !existingUserMapByName[userName]) {
       existingUserMapByName[userName] = user.id;
@@ -369,6 +362,7 @@ export const importIssues = async (apiKey: string, importer: Importer): Promise<
       labelIds,
       stateId,
       assigneeId,
+      estimate: issue.estimate,
       createdAt: issue.createdAt,
       dueDate: formattedDueDate,
       projectMilestoneId: issue.milestoneId ? milestoneMapping[issue.milestoneId] : undefined,
